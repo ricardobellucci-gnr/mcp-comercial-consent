@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Comercial — Autorização</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #14141a; color: #e6e6ea; display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  main { max-width: 26rem; padding: 2rem; background: #1e1e26; border-radius: .75rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 1rem; }
+  p { font-size: .95rem; line-height: 1.5; }
+  .escopo { color: #a8a8b3; font-size: .8rem; }
+  .acoes { display: flex; gap: .75rem; margin-top: 1.25rem; }
+  button { flex: 1; padding: .6rem 0; border: 0; border-radius: .5rem; font-size: .95rem; cursor: pointer; }
+  #ok { background: #4f8ef7; color: #fff; }
+  #no { background: transparent; color: #a8a8b3; border: 1px solid #3a3a45; }
+  .erro { color: #f29c9c; }
+</style>
+</head>
+<body>
+<main id="tela"><p>Carregando…</p></main>
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const url = "https://oythxlvrjlyvtutbyzde.supabase.co";
+const key = "sb_publishable_VzQ0kdX8FVSZdLW5JD43zw_-wj6NO7J";
+const supabase = createClient(url, key);
+const tela = document.getElementById("tela");
+const params = new URLSearchParams(location.search);
+if (params.get("authorization_id")) sessionStorage.setItem("mcp_authz", params.get("authorization_id"));
+const authorizationId = params.get("authorization_id") ?? sessionStorage.getItem("mcp_authz");
+const falha = (m) => { tela.innerHTML = '<p class="erro">' + m + "</p>"; };
+const el = (tag, texto) => { const e = document.createElement(tag); e.textContent = texto; return e; };
+let ocupado = false;
+
+async function decidir(acao, sessao) {
+  const r = await fetch(url + "/auth/v1/oauth/authorizations/" + authorizationId + "/consent", {
+    method: "POST",
+    headers: { apikey: key, Authorization: "Bearer " + sessao.access_token, "Content-Type": "application/json" },
+    body: JSON.stringify({ action: acao }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  if (dados.redirect_url) { location.assign(dados.redirect_url); return; }
+  falha("Não foi possível concluir (" + r.status + "). Volte ao Claude e vincule de novo.");
+}
+
+async function prosseguir(sessao) {
+  if (ocupado) return;
+  ocupado = true;
+  const r = await fetch(url + "/auth/v1/oauth/authorizations/" + authorizationId, {
+    headers: { apikey: key, Authorization: "Bearer " + sessao.access_token },
+  });
+  const dados = await r.json().catch(() => ({}));
+  if (dados.redirect_url) { location.assign(dados.redirect_url); return; }
+  if (!r.ok) { falha("Autorização inválida ou expirada. Volte ao Claude e vincule de novo."); return; }
+  const h1 = el("h1", "MCP Comercial");
+  const p = el("p", "");
+  const b1 = el("strong", dados.client?.name ?? "Claude");
+  const b2 = el("strong", dados.user?.email ?? "");
+  p.append("O aplicativo ", b1, " pede acesso com a sua conta ", b2, ".");
+  const s = el("p", "Permissão solicitada: " + (dados.scope ?? "openid"));
+  s.className = "escopo";
+  const acoes = el("div", "");
+  acoes.className = "acoes";
+  const ok = el("button", "Autorizar"); ok.id = "ok";
+  const no = el("button", "Negar"); no.id = "no";
+  acoes.append(ok, no);
+  tela.replaceChildren(h1, p, s, acoes);
+  ok.onclick = () => decidir("approve", sessao);
+  no.onclick = () => decidir("deny", sessao);
+}
+
+if (!authorizationId) {
+  falha("authorization_id ausente. Abra este link somente a partir do Claude.");
+} else {
+  supabase.auth.onAuthStateChange((_e, s) => { if (s) prosseguir(s); });
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) await prosseguir(session);
+  else if (!params.get("code")) {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: location.href.split("?")[0] },
+    });
+  }
+}
+</script>
+</body>
+</html>
